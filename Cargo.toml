@@ -1,0 +1,12 @@
+[package]
+name = "sync_ftp"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+suppaftp = {version="5.3.1", features=["native-tls"]}
+notify = "6.1.1"
+shellexpand = "3.1.0"
+dotenv = "0.15.0"
