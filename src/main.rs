@@ -65,8 +65,8 @@ fn main() -> Result<(), Error> {
                             }
                             ftp_stream.cwd(&part.to_string()).unwrap();
                         }
-                        let bytes_writen = ftp_stream.put_file(parts[parts.len() - 1], &mut file);
-                        println!("wrote {bytes_writen:?} bytes");
+                        let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file);
+                        println!("wrote {bytes_written:?} bytes");
                     }
                 }
                 _ => (),
