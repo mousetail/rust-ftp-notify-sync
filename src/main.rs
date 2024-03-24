@@ -4,8 +4,9 @@ use notify_debouncer_full::notify::{Error, RecursiveMode, Watcher};
 use std::fs::OpenOptions;
 use std::sync::mpsc::Receiver;
 use std::{path::Path, time::Duration};
-use suppaftp::native_tls::TlsConnector;
-use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+use suppaftp::async_native_tls::TlsConnector;
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use suppaftp::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream, NativeTlsConnector, NativeTlsFtpStream};
 
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap};
 use tokio;
@@ -65,7 +66,7 @@ fn watch_folder(
     let local_folder = config.local_folder.clone();
 
     let mut debouncer = new_debouncer(
-        Duration::from_secs(5),
+        Duration::from_secs(1),
         None,
         move |res: DebounceEventResult| match res {
             Ok(events) => {
@@ -107,25 +108,26 @@ fn watch_folder(
 #[tokio::main]
 async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
     let config = Config::from_env().unwrap();
+    env_logger::init();
 
-    let ftp_stream = NativeTlsFtpStream::connect(&config.remote_origin).unwrap_or_else(|err| {
+    let mut ftp_stream = AsyncNativeTlsFtpStream::connect(&config.remote_origin).await.unwrap_or_else(|err| {
         panic!("{err}");
     });
-    let ctx = NativeTlsConnector::from(TlsConnector::new().unwrap());
+    let ctx = AsyncNativeTlsConnector::from(TlsConnector::new());
     let mut ftp_stream = ftp_stream
         .into_secure(
             ctx,
             &config.remote_domain,
-        )
+        ).await
         .unwrap();
     ftp_stream
         .login(
             &config.remote_user,
             &config.remote_password,
-        )
+        ).await
         .unwrap();
 
-    println!("NLST output: {:?}", ftp_stream.nlst(None));
+    println!("NLST output: {:?}", ftp_stream.nlst(None).await);
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel(24);
     let _watcher = watch_folder(config.clone(), sender)?;
@@ -135,7 +137,7 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
         remote_filename,
     }) = receiver.recv().await
     {
-        ftp_stream.cwd(&config.remote_folder).unwrap();
+        ftp_stream.cwd(&config.remote_folder).await.unwrap();
 
         let parts = remote_filename
             .split("/")
@@ -147,17 +149,18 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
         }
         for part in &parts[0..parts.len() - 1] {
             println!("{part:?}");
-            if !ftp_stream.nlst(None).unwrap().contains(&part.to_string()) {
+            if !ftp_stream.nlst(None).await.unwrap().contains(&part.to_string()) {
                 println!("Making directory");
-                ftp_stream.mkdir(part).unwrap();
+                ftp_stream.mkdir(part).await.unwrap();
             }
-            ftp_stream.cwd(&part.to_string()).unwrap();
+            ftp_stream.cwd(&part.to_string()).await.unwrap();
         }
-        let mut file = OpenOptions::new()
+        let mut file = tokio::fs::OpenOptions::new()
             .read(true)
             .open(local_filename.clone())
-            .unwrap();
-        let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file);
+            .await
+            .unwrap().compat();
+        let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file).await;
         println!("wrote {bytes_written:?} bytes");
     }
     Ok(())
