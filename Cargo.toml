@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 suppaftp = {version="5.3.1", features=["native-tls"]}
-notify = "6.1.1"
 shellexpand = "3.1.0"
 dotenv = "0.15.0"
+notify-debouncer-full = {version="0.3.1", default_features=false}
+tokio = {version="1.36.0", features=["full"]}

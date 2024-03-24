@@ -1,12 +1,16 @@
-use notify::event::{AccessKind, AccessMode};
+use notify_debouncer_full::notify::event::{AccessKind, AccessMode};
+use notify_debouncer_full::notify::{RecursiveMode, Watcher};
+use notify_debouncer_full::notify::{EventKind};
 use std::fs::OpenOptions;
 use std::{path::Path, time::Duration};
 use suppaftp::native_tls::TlsConnector;
 use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
 
-use notify::{Error, Event, EventKind, RecursiveMode, Watcher};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use tokio;
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
     dotenv::dotenv().unwrap();
 
     let ftp_stream =
@@ -34,46 +38,58 @@ fn main() -> Result<(), Error> {
     let local_folder_copy = local_folder.clone();
 
     // Automatically select the best implementation for your platform.
-    let mut watcher = notify::recommended_watcher(move |res: Result<Event, Error>| match res {
-        Ok(event) => {
-            println!("event: {:?}", event);
-            match event.kind {
-                EventKind::Access(AccessKind::Close(AccessMode::Write)) => {
-                    println!("{:?}", ftp_stream.list(None));
-                    println!("paths");
-                    for path in event.paths {
-                        let mut file = OpenOptions::new().read(true).open(path.clone()).unwrap();
-                        let remote_filename =
-                            path.to_str().unwrap().replace(&local_folder_copy, "");
-                        println!("trying upload... {remote_filename}");
-                        let parts = remote_filename
-                            .split("/")
-                            .filter(|t| *t != "")
-                            .collect::<Vec<_>>();
-                        if parts.iter().any(|k| k.starts_with('.')) {
-                            println!("Skipping hidden files");
-                            continue;
-                        }
-                        ftp_stream
-                            .cwd(&std::env::var("REMOTE_FOLDER").expect("Missing remote FOLDER"))
-                            .unwrap();
-                        for part in &parts[0..parts.len() - 1] {
-                            println!("{part:?}");
-                            if !ftp_stream.nlst(None).unwrap().contains(&part.to_string()) {
-                                println!("Making directory");
-                                ftp_stream.mkdir(part).unwrap();
+    let mut debouncer = new_debouncer(
+        Duration::from_secs(5),
+        None,
+        move |res: DebounceEventResult| match res {
+            Ok(events) => {
+                for DebouncedEvent { event, .. } in events {
+                    println!("event: {:?}", event);
+                    match event.kind {
+                        EventKind::Access(AccessKind::Close(AccessMode::Write)) => {
+                            println!("{:?}", ftp_stream.list(None));
+                            println!("paths");
+                            for path in event.paths {
+                                let mut file =
+                                    OpenOptions::new().read(true).open(path.clone()).unwrap();
+                                let remote_filename =
+                                    path.to_str().unwrap().replace(&local_folder_copy, "");
+                                println!("trying upload... {remote_filename}");
+                                let parts = remote_filename
+                                    .split("/")
+                                    .filter(|t| *t != "")
+                                    .collect::<Vec<_>>();
+                                if parts.iter().any(|k| k.starts_with('.')) {
+                                    println!("Skipping hidden files");
+                                    continue;
+                                }
+                                ftp_stream
+                                    .cwd(
+                                        &std::env::var("REMOTE_FOLDER")
+                                            .expect("Missing remote FOLDER"),
+                                    )
+                                    .unwrap();
+                                for part in &parts[0..parts.len() - 1] {
+                                    println!("{part:?}");
+                                    if !ftp_stream.nlst(None).unwrap().contains(&part.to_string()) {
+                                        println!("Making directory");
+                                        ftp_stream.mkdir(part).unwrap();
+                                    }
+                                    ftp_stream.cwd(&part.to_string()).unwrap();
+                                }
+                                let bytes_written =
+                                    ftp_stream.put_file(parts[parts.len() - 1], &mut file);
+                                println!("wrote {bytes_written:?} bytes");
                             }
-                            ftp_stream.cwd(&part.to_string()).unwrap();
                         }
-                        let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file);
-                        println!("wrote {bytes_written:?} bytes");
+                        _ => (),
                     }
                 }
-                _ => (),
             }
-        }
-        Err(e) => println!("watch error: {:?}", e),
-    })?;
+            Err(e) => println!("watch error: {:?}", e),
+        },
+    )?;
+    let watcher = debouncer.watcher();
 
     let path = std::fs::canonicalize(&Path::new(&shellexpand::tilde(&local_folder).to_string()))?;
     println!("{path:?}");
