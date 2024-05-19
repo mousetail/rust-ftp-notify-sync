@@ -1,12 +1,14 @@
 use notify_debouncer_full::notify::event::{AccessKind, AccessMode};
-use notify_debouncer_full::notify::{EventKind, INotifyWatcher, RecommendedWatcher};
+use notify_debouncer_full::notify::{EventKind, RecommendedWatcher};
 use notify_debouncer_full::notify::{Error, RecursiveMode, Watcher};
-use std::fs::OpenOptions;
-use std::sync::mpsc::Receiver;
+use std::fmt::Debug;
+use std::time;
 use std::{path::Path, time::Duration};
 use suppaftp::async_native_tls::TlsConnector;
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use suppaftp::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream, NativeTlsConnector, NativeTlsFtpStream};
+use suppaftp::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream};
+use log::{debug, error, log_enabled, info, Level};
+
 
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap};
 use tokio;
@@ -71,14 +73,14 @@ fn watch_folder(
         move |res: DebounceEventResult| match res {
             Ok(events) => {
                 for DebouncedEvent { event, .. } in events {
-                    println!("event: {:?}", event);
+                    debug!("Received INOTIFY event: {:?}", event);
                     match event.kind {
                         EventKind::Access(AccessKind::Close(AccessMode::Write)) => {
                             for path in event.paths {
                                 let local_filename = path.to_str().unwrap().to_string();
                                 let remote_filename =
                                     path.to_str().unwrap().replace(&local_folder, "");
-                                println!("trying upload... {remote_filename}");
+                                debug!("Starting upload of {remote_filename}...");
 
                                 stream.blocking_send(ModificationEvent {
                                     local_filename,
@@ -90,13 +92,12 @@ fn watch_folder(
                     }
                 }
             }
-            Err(e) => println!("watch error: {:?}", e),
+            Err(e) => error!("watch error: {:?}", e),
         },
     )?;
     let watcher = debouncer.watcher();
 
     let local_folder = config.local_folder.clone();
-    println!("{local_folder:?}");
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
@@ -110,7 +111,7 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
     let config = Config::from_env().unwrap();
     env_logger::init();
 
-    let mut ftp_stream = AsyncNativeTlsFtpStream::connect(&config.remote_origin).await.unwrap_or_else(|err| {
+    let ftp_stream = AsyncNativeTlsFtpStream::connect(&config.remote_origin).await.unwrap_or_else(|err| {
         panic!("{err}");
     });
     let ctx = AsyncNativeTlsConnector::from(TlsConnector::new());
@@ -127,8 +128,6 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
         ).await
         .unwrap();
 
-    println!("NLST output: {:?}", ftp_stream.nlst(None).await);
-
     let (sender, mut receiver) = tokio::sync::mpsc::channel(24);
     let _watcher = watch_folder(config.clone(), sender)?;
 
@@ -144,24 +143,27 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
             .filter(|t| *t != "")
             .collect::<Vec<_>>();
         if parts.iter().any(|k| k.starts_with('.')) {
-            println!("Skipping hidden files");
             continue;
         }
         for part in &parts[0..parts.len() - 1] {
-            println!("{part:?}");
             if !ftp_stream.nlst(None).await.unwrap().contains(&part.to_string()) {
-                println!("Making directory");
+                debug!("Automatically creating directory {part}");
                 ftp_stream.mkdir(part).await.unwrap();
             }
             ftp_stream.cwd(&part.to_string()).await.unwrap();
         }
+
+        let start_time = time::Instant::now();
+
         let mut file = tokio::fs::OpenOptions::new()
             .read(true)
             .open(local_filename.clone())
             .await
             .unwrap().compat();
         let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file).await;
-        println!("wrote {bytes_written:?} bytes");
+
+        let end_time = time::Instant::now();
+        debug!("wrote {bytes_written:?} bytes in {:?}", end_time - start_time);
     }
     Ok(())
 }
