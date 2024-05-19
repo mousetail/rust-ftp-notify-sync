@@ -170,7 +170,14 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
         let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file).await;
 
         let end_time = time::Instant::now();
-        debug!("wrote {bytes_written:?} bytes in {:?}", end_time - start_time);
+        match bytes_written {
+            Ok(bytes) => {
+                debug!("wrote {bytes:?} bytes in {:?}", end_time - start_time);
+            }
+            Err(e) => {
+                error!("Failed to write file: {e:?}");
+            }
+        }
     }
     Ok(())
 }
