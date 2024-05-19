@@ -1,16 +1,17 @@
+use log::{debug, error};
 use notify_debouncer_full::notify::event::{AccessKind, AccessMode};
-use notify_debouncer_full::notify::{EventKind, RecommendedWatcher};
 use notify_debouncer_full::notify::{Error, RecursiveMode, Watcher};
+use notify_debouncer_full::notify::{EventKind, RecommendedWatcher};
 use std::fmt::Debug;
 use std::time;
 use std::{path::Path, time::Duration};
 use suppaftp::async_native_tls::TlsConnector;
-use tokio_util::compat::TokioAsyncReadCompatExt;
 use suppaftp::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream};
-use log::{debug, error, log_enabled, info, Level};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
-
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap};
+use notify_debouncer_full::{
+    new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap,
+};
 use tokio;
 
 struct ModificationEvent {
@@ -82,10 +83,12 @@ fn watch_folder(
                                     path.to_str().unwrap().replace(&local_folder, "");
                                 debug!("Starting upload of {remote_filename}...");
 
-                                stream.blocking_send(ModificationEvent {
-                                    local_filename,
-                                    remote_filename,
-                                }).unwrap();
+                                stream
+                                    .blocking_send(ModificationEvent {
+                                        local_filename,
+                                        remote_filename,
+                                    })
+                                    .unwrap();
                             }
                         }
                         _ => (),
@@ -111,21 +114,19 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
     let config = Config::from_env().unwrap();
     env_logger::init();
 
-    let ftp_stream = AsyncNativeTlsFtpStream::connect(&config.remote_origin).await.unwrap_or_else(|err| {
-        panic!("{err}");
-    });
+    let ftp_stream = AsyncNativeTlsFtpStream::connect(&config.remote_origin)
+        .await
+        .unwrap_or_else(|err| {
+            panic!("{err}");
+        });
     let ctx = AsyncNativeTlsConnector::from(TlsConnector::new());
     let mut ftp_stream = ftp_stream
-        .into_secure(
-            ctx,
-            &config.remote_domain,
-        ).await
+        .into_secure(ctx, &config.remote_domain)
+        .await
         .unwrap();
     ftp_stream
-        .login(
-            &config.remote_user,
-            &config.remote_password,
-        ).await
+        .login(&config.remote_user, &config.remote_password)
+        .await
         .unwrap();
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel(24);
@@ -146,7 +147,12 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
             continue;
         }
         for part in &parts[0..parts.len() - 1] {
-            if !ftp_stream.nlst(None).await.unwrap().contains(&part.to_string()) {
+            if !ftp_stream
+                .nlst(None)
+                .await
+                .unwrap()
+                .contains(&part.to_string())
+            {
                 debug!("Automatically creating directory {part}");
                 ftp_stream.mkdir(part).await.unwrap();
             }
@@ -159,7 +165,8 @@ async fn main() -> Result<(), notify_debouncer_full::notify::Error> {
             .read(true)
             .open(local_filename.clone())
             .await
-            .unwrap().compat();
+            .unwrap()
+            .compat();
         let bytes_written = ftp_stream.put_file(parts[parts.len() - 1], &mut file).await;
 
         let end_time = time::Instant::now();
