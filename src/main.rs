@@ -31,7 +31,9 @@ struct Config {
 
 #[derive(Debug)]
 enum ConfigLoadError {
+    #[allow(unused)]
     DotEnvError(dotenv::Error),
+    #[allow(unused)]
     EnvError(std::env::VarError),
 }
 
